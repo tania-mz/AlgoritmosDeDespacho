@@ -10,6 +10,9 @@ from algoritmos import Proceso, ProcesoPrioridad, FIFO, SJF, Prioridad, RoundRob
 ALGORITMOS = ["FIFO", "SJF", "Priority", "Round Robin"]
 COLORES = ["#4C78A8", "#F58518", "#54A24B", "#E45756", "#72B7B2",
            "#B279A2", "#FF9DA6", "#9D755D", "#BAB0AC", "#EECA3B"]
+VERDE_FONDO = "#E3F6E5"    # fondo de la pantalla de inicio (verde clarito)
+VERDE_BOTON = "#A8E0AE"    # botones
+VERDE_HOVER = "#8FD397"    # botones al pasar el mouse
  
  
 # ----------------------------------------------------------------------
@@ -31,15 +34,12 @@ class App(tk.Tk):
         self.pantalla.pack(fill="both", expand=True)
  
     def mostrar_menu(self):
-        marco = ttk.Frame(self)
-        ttk.Label(marco, text="Algoritmos de despacho",
-                font=("Arial", 22, "bold")).pack(pady=(90, 8))
-        ttk.Label(marco, text="Elige el algoritmo que quieres ver",
-                font=("Arial", 12)).pack(pady=(0, 30))
+        """Pantalla inicial: un botón por algoritmo, sobre fondo verde clarito."""
+        marco = tk.Frame(self, bg=VERDE_FONDO)
+        tk.Label(marco, text="Algoritmos de despacho", bg=VERDE_FONDO, font=("Arial", 22, "bold")).pack(pady=(90, 8))
+        tk.Label(marco, text="Elige el algoritmo que quieres ver", bg=VERDE_FONDO, font=("Arial", 12)).pack(pady=(0, 30))
         for nombre in ALGORITMOS:
-            ttk.Button(marco, text=nombre, width=26,
-                    command=lambda n=nombre: self.mostrar_simulador(n)
-                    ).pack(pady=8, ipady=8)
+            tk.Button(marco, text=nombre, width=26, font=("Arial", 12), bg=VERDE_BOTON, activebackground=VERDE_HOVER, relief="flat", cursor="hand2",command=lambda n=nombre: self.mostrar_simulador(n)).pack(pady=8, ipady=8)
         self._cambiar_pantalla(marco)
  
     def mostrar_simulador(self, algoritmo):
@@ -55,7 +55,7 @@ class Simulador(ttk.Frame):
         super().__init__(master)
         self.algoritmo = algoritmo   # nombre del algoritmo elegido
         self.volver = volver         # función para regresar al menú
-        self.procesos = []           # objetos Proceso cargados por el usuario
+        self.procesos = []           # objetos Proceso cargados por el usuarios
         self._crear_panel_izquierdo()
         self._crear_panel_derecho()
         self.actualizar()
@@ -103,14 +103,16 @@ class Simulador(ttk.Frame):
         botones = ttk.Frame(izq)
         botones.pack(fill="x", pady=10)
         ttk.Button(botones, text="Agregar (Enter)", command=self.agregar).pack(side="left")
-        ttk.Button(botones, text="Limpiar todo", command=self.limpiar).pack(side="left", padx=6)
+        ttk.Button(botones, text="Eliminar seleccionado", command=self.eliminar).pack(side="left", padx=6)
+        ttk.Button(botones, text="Limpiar todo", command=self.limpiar).pack(side="left")
  
         # Tabla con los procesos ingresados
         self.tabla = ttk.Treeview(izq, columns=self.campos, show="headings", height=14)
         for c in self.campos:
             self.tabla.heading(c, text=c)
             self.tabla.column(c, width=95, anchor="center")
-        self.tabla.pack(fill="y", expand=True)
+        self.tabla.pack(fill="y", expand=True) 
+        self.tabla.bind("<Delete>", self.eliminar)   
  
         ttk.Button(izq, text="← Volver al menú", command=self.volver).pack(anchor="w", pady=(10, 0))
  
@@ -169,12 +171,10 @@ class Simulador(ttk.Frame):
         except ValueError as error:
             messagebox.showwarning("Dato inválido", str(error))
             return
- 
+
         self.procesos.append(proceso)
         self.tabla.insert("", "end", values=[e.get().strip() for e in self.entradas.values()])
-        for e in self.entradas.values():   # limpia el formulario
-            e.delete(0, "end")
-        self.entradas["Nombre"].focus()
+        self._limpiar_formulario()
         self.actualizar()
  
     def limpiar(self):
@@ -182,6 +182,23 @@ class Simulador(ttk.Frame):
         self.procesos.clear()
         self.tabla.delete(*self.tabla.get_children())
         self.actualizar()
+
+    def eliminar(self, evento=None):
+        """Elimina el proceso seleccionado en la tabla."""
+        seleccion = self.tabla.selection()
+        if not seleccion:
+            messagebox.showinfo("Eliminar", "Primero selecciona un proceso de la tabla.")
+            return
+        indice = self.tabla.index(seleccion[0])   # la fila tiene la misma posición que en self.procesos
+        del self.procesos[indice]
+        self.tabla.delete(seleccion[0])
+        self.actualizar()                         # redibuja la gráfica y recalcula los tiempos
+
+    def _limpiar_formulario(self):
+        """Vacía las casillas y deja el cursor en 'Nombre'."""
+        for e in self.entradas.values():
+            e.delete(0, "end")
+        self.entradas["Nombre"].focus()
  
     # ------------------------- Cálculo y dibujo ------------------------
     def _crear_algoritmo(self):
@@ -207,12 +224,14 @@ class Simulador(ttk.Frame):
         for p in self.procesos:
             alg.agregar(p)
         segmentos, metricas = alg.ejecutar()
- 
+
         self._dibujar_gantt(segmentos)
-        self._llenar_tiempos(metricas)
         if self.algoritmo == "Round Robin":
+            self._llenar_tiempos_round(alg, segmentos, metricas)
             self.lbl_rounds.config(text=f"Cantidad de rounds: {alg.calcularRounds()}")
- 
+        else:
+            self._llenar_tiempos(metricas)
+
     def _dibujar_gantt(self, segmentos):
         """Un proceso por fila; cada tramo de ejecución es una barra horizontal."""
         ax = self.ejes
@@ -241,10 +260,32 @@ class Simulador(ttk.Frame):
         self.canvas.draw()
  
     def _llenar_tiempos(self, metricas):
-        """Rellena la tabla de tiempos y muestra los promedios."""
+        """Tabla de tiempos para FIFO, SJF y Priority."""
         self.tabla_tiempos.delete(*self.tabla_tiempos.get_children())
         for fila in metricas:
             self.tabla_tiempos.insert("", "end", values=fila)
+        self._mostrar_promedios(metricas)
+
+    def _llenar_tiempos_round(self, alg, segmentos, metricas):
+        """Tabla de Round Robin: una columna de espera por cada round."""
+        self.tabla_tiempos.delete(*self.tabla_tiempos.get_children())
+        n = alg.calcularRounds()   # cantidad de columnas TERound
+        cols = (["Proceso"] + [f"TERound {i}" for i in range(1, n + 1)]
+                + ["Tiempo de espera", "Tiempo de sistema"])
+        self.tabla_tiempos["columns"] = cols   # las columnas cambian según los rounds
+        for c in cols:
+            self.tabla_tiempos.heading(c, text=c)
+            self.tabla_tiempos.column(c, anchor="center", width=90, minwidth=60)
+
+        por_round = alg.esperasPorRound(segmentos)
+        for nombre, espera, sistema in metricas:
+            esperas = por_round[nombre]
+            celdas = esperas + ["-"] * (n - len(esperas))   # "-" si terminó antes
+            self.tabla_tiempos.insert("", "end", values=[nombre, *celdas, espera, sistema])
+        self._mostrar_promedios(metricas)
+
+    def _mostrar_promedios(self, metricas):
+        """Promedio de espera y de sistema (suma de totales / cantidad de procesos)."""
         if metricas:
             prom_e = sum(m[1] for m in metricas) / len(metricas)
             prom_s = sum(m[2] for m in metricas) / len(metricas)
