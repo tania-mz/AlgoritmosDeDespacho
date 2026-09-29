@@ -7,7 +7,7 @@ from matplotlib.ticker import MaxNLocator
  
 from algoritmos import Proceso, ProcesoPrioridad, FIFO, SJF, Prioridad, RoundRobin
  
-ALGORITMOS = ["FIFO", "SJF", "Priority", "Round Robin"]
+ALGORITMOS = ["FIFO", "SJF", "Priority", "Round Robin", "Estadísticas"]
 COLORES = ["#4C78A8", "#F58518", "#54A24B", "#E45756", "#72B7B2",
            "#B279A2", "#FF9DA6", "#9D755D", "#BAB0AC", "#EECA3B"]
 VERDE_FONDO = "#E3F6E5"    # fondo de la pantalla de inicio (verde clarito)
@@ -70,7 +70,7 @@ class Simulador(ttk.Frame):
  
         # Campos: la prioridad solo aparece en Priority
         self.campos = ["Nombre", "Ráfaga de CPU", "Tiempo de llegada"]
-        if self.algoritmo == "Priority":
+        if self.algoritmo in ("Priority", "Estadísticas"):
             self.campos.append("Prioridad")
  
         form = ttk.Frame(izq)
@@ -93,7 +93,7 @@ class Simulador(ttk.Frame):
  
         # El quantum es un único valor para todo Round Robin
         self.spin_quantum = None
-        if self.algoritmo == "Round Robin":
+        if self.algoritmo in ("Round Robin", "Estadísticas"):
             ttk.Label(form, text="Quantum").grid(row=len(self.campos), column=0, sticky="w", pady=3)
             self.spin_quantum = ttk.Spinbox(form, from_=1, to=100, width=12, command=self.actualizar)
             self.spin_quantum.set(2)
@@ -126,6 +126,8 @@ class Simulador(ttk.Frame):
         self.ejes = self.figura.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(self.figura, master=der)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        if self.algoritmo == "Estadísticas":
+            return
  
         # Cantidad de rounds (solo Round Robin)
         self.lbl_rounds = ttk.Label(der, font=("Arial", 11, "bold"))
@@ -164,7 +166,7 @@ class Simulador(ttk.Frame):
                 raise ValueError("La ráfaga debe ser mayor que 0.")
             if llegada < 0:
                 raise ValueError("El tiempo de llegada no puede ser negativo.")
-            if self.algoritmo == "Priority":
+            if self.algoritmo in ("Priority", "Estadísticas"):
                 proceso = ProcesoPrioridad(nombre, rafaga, llegada, self._entero("Prioridad"))
             else:
                 proceso = Proceso(nombre, rafaga, llegada)
@@ -217,6 +219,9 @@ class Simulador(ttk.Frame):
  
     def actualizar(self):
         """Recalcula con los procesos actuales y redibuja todo."""
+        if self.algoritmo == "Estadísticas":
+            self._actualizar_estadisticas()
+            return
         alg = self._crear_algoritmo()
         if alg is None:
             self.lbl_rounds.config(text="Quantum inválido (entero mayor que 0)")
@@ -256,6 +261,62 @@ class Simulador(ttk.Frame):
             ax.set_ylabel("Procesos")
             ax.grid(axis="x", linestyle="--", alpha=0.5)
         ax.set_title(f"Diagrama de Gantt - {self.algoritmo}")
+        self.figura.tight_layout()
+        self.canvas.draw()
+
+    def _actualizar_estadisticas(self):
+        """Corre los 4 algoritmos con los mismos procesos y compara sus promedios."""
+        try:
+            quantum = int(self.spin_quantum.get())
+            if quantum <= 0:
+                raise ValueError
+        except ValueError:
+            self._dibujar_barras({}, "Quantum inválido (entero mayor que 0)")
+            return
+
+        algoritmos = {"FIFO": FIFO(), "SJF": SJF(),
+                    "Priority": Prioridad(), "Round Robin": RoundRobin(quantum)}
+        promedios = {}   # {algoritmo: (espera promedio, sistema promedio)}
+        for nombre, alg in algoritmos.items():
+            for p in self.procesos:
+                alg.agregar(p)
+            _, metricas = alg.ejecutar()
+            if metricas:
+                n = len(metricas)
+                promedios[nombre] = (sum(m[1] for m in metricas) / n, sum(m[2] for m in metricas) / n)
+        self._dibujar_barras(promedios)
+
+    def _dibujar_barras(self, promedios, mensaje=None):
+        """Barras dobles: por cada algoritmo, espera promedio y sistema promedio."""
+        ax = self.ejes
+        ax.clear()
+        if not promedios:
+            ax.text(0.5, 0.5, mensaje or "Agrega procesos para comparar los algoritmos",
+                    ha="center", va="center", transform=ax.transAxes)
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_title("Comparación de algoritmos")
+        else:
+            nombres = list(promedios)
+            esperas = [promedios[n][0] for n in nombres]
+            sistemas = [promedios[n][1] for n in nombres]
+            x = range(len(nombres))
+            ancho = 0.38   # cada algoritmo tiene dos barras lado a lado
+            barras_e = ax.bar([i - ancho / 2 for i in x], esperas, ancho, label="Tiempo de espera promedio", color=COLORES[0], edgecolor="black")
+            barras_s = ax.bar([i + ancho / 2 for i in x], sistemas, ancho, label="Tiempo en el sistema promedio", color=COLORES[1], edgecolor="black")
+            ax.bar_label(barras_e, fmt="%.2f", padding=2)   # valor sobre cada barra
+            ax.bar_label(barras_s, fmt="%.2f", padding=2)
+            ax.set_xticks(list(x))
+            ax.set_xticklabels(nombres)
+            ax.set_xlabel("Algoritmos")
+            ax.set_ylabel("Tiempo promedio (s)")
+            ax.set_ylim(0, max(esperas + sistemas) * 1.15 or 1)   # espacio para los valores
+            ax.grid(axis="y", linestyle="--", alpha=0.5)
+            ax.legend()
+            # El título indica cuál algoritmo tiene menor espera promedio (puede haber empates)
+            menor = min(round(e, 6) for e in esperas)
+            mejores = [n for n, e in zip(nombres, esperas) if round(e, 6) == menor]
+            ax.set_title("Menor tiempo de espera promedio: " + ", ".join(mejores))
         self.figura.tight_layout()
         self.canvas.draw()
  
